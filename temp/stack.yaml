@@ -1,0 +1,321 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CloudFormation stack que crea:
+  - Dos buckets S3 (origen y destino)
+  - Roles de IAM para las funciones Lambda y Step Functions
+  - Funciones Lambda para la logica de firma y creacion del Job IoT
+  - Una maquina de estados en Step Functions para orquestar el flujo completo
+
+Parameters:
+  SourceBucketName:
+    Type: String
+    Default: ota-binaries-bucket
+    Description: "Nombre del bucket de origen"
+
+Resources:
+  # Buckets S3
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref SourceBucketName
+      AccessControl: Private
+      VersioningConfiguration:
+        Status: Enabled
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  # Politicas de Bucket
+  SourceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SourceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt LambdaExecutionRole.Arn
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:ListBucket
+            Resource:
+              - !Sub "arn:aws:s3:::${SourceBucketName}"
+              - !Sub "arn:aws:s3:::${SourceBucketName}/*"
+
+  # Rol de Ejecucion para Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRoleForSigningWorkflow
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPolicyForSigningWorkflow
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucketName}"
+                  - !Sub "arn:aws:s3:::${SourceBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - iot:CreateJob
+                Resource:
+                  - "arn:aws:iot:us-east-2:730335402738:thing/*"
+                  - "arn:aws:iot:us-east-2:730335402738:thinggroup/*"
+                  - "arn:aws:iot:us-east-2:730335402738:job/*"
+
+  # EventBridge Rule: S3 a Step Functions
+  S3ToStepFunctionsEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Dispara la maquina de estados al crear un objeto en el bucket de origen"
+      EventPattern:
+        source:
+          - "aws.s3"
+        detail-type:
+          - "Object Created"
+        detail:
+          bucket:
+            name:
+              - !Ref SourceBucketName
+      State: "ENABLED"
+      Targets:
+        - Arn: !Ref SigningStateMachine
+          Id: "StepFunctionsTarget"
+          RoleArn: !GetAtt EventBridgeInvokeRole.Arn
+
+  # Rol para EventBridge
+  EventBridgeInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: "InvokeStepFunctionsStateMachine"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: "states:StartExecution"
+                Resource: !Ref SigningStateMachine
+
+  # Funcion Lambda: Extraer Metadata
+  InitializerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: InitializerFunction
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              print(json.dumps(event, indent=2))
+              if "Records" in event:
+                  record = event["Records"][0]
+
+                  bucket_name = record["s3"]["bucket"]["name"]
+                  object_key = record["s3"]["object"]["key"]
+                  filesize = record["s3"]["object"].get("size", 0)
+                  source_version_id = record["s3"]["object"].get("version-id", "null")
+              else:
+                  detail = event["detail"]
+
+                  bucket_name = detail["bucket"]["name"]
+                  object_key = detail["object"]["key"]
+                  filesize = detail["object"].get("size", 0)
+                  source_version_id = detail["object"].get("version-id", "null")
+              
+              parts = object_key.split("_")
+              if parts[0] == "group":
+                  tipo = "group"
+                  name = parts[1].replace(".bin", "")
+              else:
+                  tipo = "thing"
+                  name = parts[0].replace(".bin", "")
+              
+              return {
+                  "source_bucket": bucket_name,
+                  "source_key": object_key,
+                  "source_versionId": source_version_id,
+                  "tipo": tipo,
+                  "nombre": name,
+                  "filesize": filesize
+              }
+
+      Runtime: python3.9
+      Timeout: 10
+
+  # Funcion Lambda: Iniciar el Job de IoT
+  CreateIoTJobFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: CreateIoTJobFunction
+      Handler: index.create_iot_job
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import uuid
+          from botocore.config import Config
+
+          def create_iot_job(event, context):
+              # Determinar región y cuenta
+              session = boto3.session.Session()
+              region = session.region_name or 'us-east-2'
+              account_id = boto3.client('sts').get_caller_identity()['Account']
+
+              # Cliente IoT
+              iot = boto3.client('iot', region_name=region)
+
+              # Cliente S3 **con región** + payload signing habilitado
+              s3 = boto3.client('s3',
+                  region_name='us-east-2',
+                  config=Config(
+                  signature_version='s3v4',
+                  s3={
+                      'payload_signing_enabled': True,
+                      'addressing_style': 'path'        # ← forzar path-style
+                  }
+                  )
+              )
+
+              name             = event.get('nombre')
+              tipe             = event.get('tipo')
+              source_bucket    = event.get('source_bucket')
+              source_key       = event.get('source_key')
+              source_versionId = event.get('source_versionId')
+              filesize         = event.get('filesize')
+              
+              UUID = str(uuid.uuid4())
+
+              # Construir ARN del dispositivo/grupo
+              region = boto3.session.Session().region_name
+              account_id = event.get('account', boto3.client('sts').get_caller_identity()['Account'])
+              target_arn = f"arn:aws:iot:{region}:{account_id}:"
+              target_arn += f"thing/{name}" if tipe == "thing" else f"thinggroup/{name}"
+
+              # Generar una URL pre-firmada para el archivo firmado
+              presigned_url = s3.generate_presigned_url(
+                  'get_object',
+                  Params={
+                      'Bucket':      source_bucket,
+                      'Key':         source_key,
+                      'VersionId':   source_versionId
+                  },
+                  ExpiresIn=3600*11
+              )
+
+              # Crear el Job IoT con el formato deseado
+              job_document = {
+                  "afr_ota": {
+                      "protocols": ["MQTT"],
+                      "streamname": f"AFR_OTA-{UUID}",
+                      "files": [{
+                          "filepath": "/",
+                          "filesize": filesize,
+                          "fileid": 0,
+                          "url": presigned_url  
+                      }]
+                  }
+              }
+
+              iot.create_job(
+                  jobId=UUID,
+                  targets=[target_arn],
+                  document=json.dumps(job_document),
+                  targetSelection='CONTINUOUS' if tipe=="group" else 'SNAPSHOT'
+              )
+
+              return {
+                  "job_id": UUID,
+                  "source_bucket": source_bucket,
+                  "source_key": source_key,
+                  "source_versionId": source_versionId,
+                  "presigned_url": presigned_url,
+                  "status": "SUCCEEDED"
+              }
+
+      Runtime: python3.9
+      Timeout: 10
+
+  # Maquina de Estados (Step Functions)
+  SigningStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Flujo optimizado para crear un Job IoT",
+          "StartAt": "InicializarDatos",
+          "States": {
+            "InicializarDatos": {
+              "Type": "Task",
+              "Resource": "${InitializerFunction.Arn}",
+              "Next": "CrearJobIoT"
+            },
+            "CrearJobIoT": {
+              "Type": "Task",
+              "Resource": "${CreateIoTJobFunction.Arn}",
+              "End": true
+            }
+          }
+        }
+
+  # Rol para Step Functions
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: StepFunctionsExecutionRoleForSigningWorkflow
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsLambdaInvokePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt InitializerFunction.Arn
+                  - !GetAtt CreateIoTJobFunction.Arn
+
+Outputs:
+  SourceBucketNameOutput:
+    Description: "Nombre del bucket de origen"
+    Value: !Ref SourceBucketName
+  StateMachineARN:
+    Description: "ARN de la maquina de estados creada"
+    Value: !Ref SigningStateMachine

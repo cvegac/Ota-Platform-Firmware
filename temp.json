@@ -1,0 +1,27 @@
+{
+  "timestamp": 1740984204,
+  "execution": {
+    "jobId": "df6c6b73-f242-4168-94c5-d2a42599327a",
+    "status": "QUEUED",
+    "queuedAt": 1740984202,
+    "lastUpdatedAt": 1740984202,
+    "versionNumber": 1,
+    "executionNumber": 1,
+    "jobDocument": {
+      "afr_ota": {
+        "protocols": ["MQTT"],
+        "streamname": "AFR_OTA-df6c6b73-f242-4168-94c5-d2a42599327a",
+        "files": [
+          {
+            "filepath": "/",
+            "filesize": 941216,
+            "fileid": 0,
+            "certfile": "/",
+            "sig-sha256-ecdsa": "MEUCIBUV1iQfETUQ4p6pEGtSNOfnq3QLRSnWr/Y2kF0jDISeAiEA3lr1gB4A1SYWIWNZ1N1prQPF8jax2+9VA4srwdxmSho=",
+            "url": "https://ota-unsigned-binaries-bucket.s3.amazonaws.com/e0cd84f0-888d-4349-80e7-d0e19c69353d/thing_ESP32-S3-01-test_SigningProfile5_df6c6b73-f242-4168-94c5-d2a42599327a.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIA2UC3B3LZLKE45BYO%2F20250303%2Fus-east-2%2Fs3%2Faws4_request&X-Amz-Date=20250303T064319Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJf%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLWVhc3QtMiJHMEUCIQCTGUXgig%2BrsbQMgtq%2FHW7r45784UCpM48egu9M%2FJwk3wIgLJL9NV7JykDpazfPo49s5P6y9S0fUYRWewzc8E%2BzX3oqhQMI0P%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARAAGgw3MzAzMzU0MDI3MzgiDDr91dIDpcffrx%2FNVCrZAq3wJ8fyiz%2BVZ%2Fxu3EX122Ut8aXaN7ugTyT9EjdipowRJ0cLU1X4%2FP0YHaXin%2BZchNZSJH9Wmrsh%2FXDa%2F4rfRyj32o54oLr34bPqiIv93GgvALcNGXUFuOzAkGHvItzoAJaxfhcD%2BFqoGjAuxIKnGvMsImeKYDiEe1oG7nSLvnERPbXcctlO5zNN7kEtWbXamJ9tUdBZfTIfxFkrc2LyALP6C0aOzg5jK66kzk%2Fhcc8nUW6nNJViIUKclgLOVvIjh3xEIjYx9X45oM2Fkn0K8PVdnmvJV%2F3GI9WJDI9OLizn%2Bjevgi8p34N6pGVlFXvAa43l6qk6Z3DgRa1LFWH%2F3wZhXaqYN8uQJ00PPQpEvD5eCWYYGPOiO4U2LWA2z4nQoWb%2Flxs3glqnTNYVf3pvV9xrCyOEQ7BNY%2Fi5D2NgzQnzRdVVCk7f50ugWDgAk9t15xpBj%2Bsysam7tDCSnpW%2BBjqeARNffBfNh%2Fpej9iF3t37yUHkMnR4Xnm71BuVTIfZV95SUZhljtdpIYQIYiUdFn6Z05W2mL3Ej7Ovy%2F6Coke5QxJGY45J8%2F2sw34sG2F%2FZrwsISEjf%2F3JZXEzqgTJNmIWDoAbpcDoU6k8taPPPq59Aay%2Fd5dirZFs6VJGTfWRYGHa38n9bXBJ%2F14tZQQuGx4klu8g08JQxkI0iQjBSUJ%2F&X-Amz-Signature=f0e861cc99e3a6fde2e7cbc7d4f08335bac211e45fc6627f194c0c95c76a9259"
+          }
+        ]
+      }
+    }
+  }
+}
